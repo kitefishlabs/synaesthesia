@@ -20,9 +20,10 @@ ESC - exit
 
 import numpy as np
 import cv, cv2, video
-import math
+import math, wave
 from common import anorm2, draw_str
 from time import clock
+from bregman.suite import *
 
 lk_params = dict( winSize  = (15,15),
                   maxLevel = 2,
@@ -174,6 +175,23 @@ class App:
 				new[(i*8)+j] = np.mean(img[i*facy:i*facy+facy,j*facx:j*facx+facx])
 				new[64+(i*8)+j] = np.var(img[i*facy:i*facy+facy,j*facx:j*facx+facx] / 8.0)
 		return (new / 256.0)
+
+	def convert_and_save(self, filepath = "/Users/kfl/dev/python/synaesthesia/tripod/00100.mov"):
+		frames = os.path.getsize(filepath + ".oflw") / 2560
+		fp = np.memmap(filepath + ".oflw", dtype='float32', mode='r+', shape=(frames,512+128))
+
+		fpflat_motion = np.reshape(np.asarray(fp[:,:512] / fp[:,:512].max()), (-1,512))
+		fpflat_bright = np.reshape(np.asarray(fp[:,512:]), (-1,128))
+
+		fpmi = np.memmap(filepath+".motionbrightness", dtype='int32', mode='w+', shape=(frames,64,10))
+		for frame in range(frames):
+			fpmi[frame,::] = np.array([np.append(fpflat_motion[frame,(range(8*i, (8*(i+1))))], fpflat_bright[frame,[i,(64+i)]]) * 1000.0 for i in range(64)], dtype='int32')
+		del fpmi
+
+	def get_fpmi(self, filepath = "/Users/kfl/dev/python/synaesthesia/tripod/00100.mov"):
+		frames = os.path.getsize(filepath + ".oflw") / 2560
+		fpmi = np.memmap(filepath+".motionbrightness", dtype='int32', mode='r+', shape=(frames,64,10))
+		return fpmi
 
 
 def main():

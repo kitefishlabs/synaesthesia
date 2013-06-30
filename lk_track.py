@@ -24,7 +24,7 @@ import math
 from common import anorm2, draw_str
 from time import clock
 
-lk_params = dict( winSize  = (15, 15),
+lk_params = dict( winSize  = (15,15),
                   maxLevel = 2,
                   criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
 
@@ -38,7 +38,7 @@ COLS = 8 * 8 * 8
 
 class App:
 	def __init__(self, video_src):
-		self.track_len = 10
+		self.track_len = 25
 		self.detect_interval = 1
 		self.tracks = []
 	
@@ -56,7 +56,7 @@ class App:
 		print self.total_frame_count
 		
 		self.data_path = str(video_src) + ".oflw"
-		self.fp = np.memmap(self.data_path, dtype='float32', mode='w+', shape=(self.total_frame_count,512))
+		self.fp = np.memmap(self.data_path, dtype='float32', mode='w+', shape=(self.total_frame_count,(512+128)))
 
 		self.cam = video.create_capture(video_src)
 		self.frame_idx = 0
@@ -66,6 +66,8 @@ class App:
 		while True:
 			ret, frame = self.cam.read()
 			frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+			frame_gray_ds = self.blur(frame_gray, 135, 240)
+# 			print frame_gray_ds
 			vis = frame.copy()
 
 			if len(self.tracks) > 0:
@@ -124,7 +126,7 @@ class App:
 					theta_bins = np.floor_divide(np.add(thetas, math.pi), QPI)
 # 					ctheta_bins = np.floor_divide(np.add(cthetas, math.pi), QPI)
 									
-					combo_bins = ((np.add(np.multiply(ybin, 4), xbin) * 8) + theta_bins)
+					combo_bins = ((np.add(np.multiply(ybin, 8), xbin) * 8) + theta_bins)
 					
 					if combo_bins.shape[0] > 0:
 				 
@@ -137,7 +139,9 @@ class App:
 # 						print "-----------------------------------------------"
 	
 
-						self.fp[self.frame_idx] = bins_histo
+						self.fp[self.frame_idx,:512] = bins_histo
+						self.fp[self.frame_idx,512:] = frame_gray_ds[:]
+# 						print self.frame_idx
 					else:
 
 						if verbose: print 'Zero! frame: ', self.frame_idx
@@ -152,11 +156,25 @@ class App:
 			
 			self.frame_idx += 1
 			self.prev_gray = frame_gray
-			cv2.imshow('lk_track', vis)
+# 			cv2.imshow('lk_track', vis)
 
 			ch = 0xFF & cv2.waitKey(1)
 			if ch == 27:
 				break
+
+	def blur(self, img, facy, facx):
+# 		print img.shape
+		y, x = img.shape
+# 		print x % facx
+# 		print y % facy
+		assert (x % facx == 0 and y % facy == 0)
+		new = np.zeros(((x / facx) * (y / facy) * 2), dtype='float32')
+		for i in range(y / facy):
+			for j in range(x / facx):
+				new[(i*8)+j] = np.mean(img[i*facy:i*facy+facy,j*facx:j*facx+facx])
+				new[64+(i*8)+j] = np.var(img[i*facy:i*facy+facy,j*facx:j*facx+facx] / 8.0)
+		return (new / 256.0)
+
 
 def main():
 	import sys

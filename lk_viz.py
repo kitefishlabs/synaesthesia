@@ -25,32 +25,34 @@ from common import anorm2, draw_str
 from time import clock
 from bregman.suite import *
 
-lk_params = dict( winSize  = (15,15),
+lk_params = dict( winSize  = (15,15), #(45,45)
                   maxLevel = 2,
                   criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
 
-feature_params = dict( maxCorners = 500,
-                       qualityLevel = 0.3,
-                       minDistance = 7,
-                       blockSize = 7 )
-MAXDIFF = 1.0
+feature_params = dict( maxCorners = 100,
+                       qualityLevel = 0.3,	# 0.3
+                       minDistance = 7,		# 7
+                       blockSize = 7 )		# 7
+MAXDIFF = 10.0
 QPI = math.pi / 4.0
 COLS = 8 * 8 * 8
-
+THETAS_X = [-48.0, -24*math.sqrt(2.0), 0.0, 24*math.sqrt(2.0), 48.0, 24*math.sqrt(2.0), 0.0, -24*math.sqrt(2.0)]
+THETAS_Y = [0.0, -24*math.sqrt(2.0), -48.0, -24*math.sqrt(2.0), 0.0, 24*math.sqrt(2.0), 48.0, 24*math.sqrt(2.0)]
+THETAS = [[pair[0],pair[1]] for pair in zip(THETAS_X, THETAS_Y)]
 
 class App:
 	def __init__(self, video_src):
-		self.track_len = 25
+		self.track_len = 13
 		self.detect_interval = 1
 		self.tracks = []
 	
 		self.capture = cv2.VideoCapture(video_src)
 	
-		self.frame_width = int(self.capture.get(cv.CV_CAP_PROP_FRAME_WIDTH)/2)
-		self.frame_height = int(self.capture.get(cv.CV_CAP_PROP_FRAME_HEIGHT)/2)
+		self.frame_width = int(self.capture.get(cv.CV_CAP_PROP_FRAME_WIDTH))
+		self.frame_height = int(self.capture.get(cv.CV_CAP_PROP_FRAME_HEIGHT))
 		self.frame_size = (self.frame_width, self.frame_height)
-		self.grid_width = int(self.frame_width/8/2)
-		self.grid_height = int(self.frame_height/8/2)
+		self.grid_width = int(self.frame_width/8)
+		self.grid_height = int(self.frame_height/8)
 		self.grid_size = (self.grid_width, self.grid_height)
 		self.total_frame_count = int(self.capture.get(cv.CV_CAP_PROP_FRAME_COUNT))	
 		print self.frame_size
@@ -58,7 +60,6 @@ class App:
 		print self.total_frame_count
 		
 		self.data_path = str(video_src) + ".oflw"
-		print self.data_path
 		self.fp = np.memmap(self.data_path, dtype='float32', mode='w+', shape=(self.total_frame_count,(512+128)))
 
 		print "FP shape: ", self.fp.shape
@@ -70,21 +71,24 @@ class App:
 		while (self.frame_idx < self.fp.shape[0] / 10):
 			print "FI: ", self.frame_idx
 			ret, frame = self.cam.read()
+			
+			frame_red = cv2.split(frame)[0]
+			frame_red_masked = cv2.inRange(frame_red, 32, 255)
 			frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 			frame_gray_ds = self.blur(frame_gray, 135, 240)
-			frame_gray = cv2.resize(frame_gray, self.frame_size)
-			
-			vis = frame_gray.copy()
+# 			print frame_gray_ds
+# 			vis = frame.copy()
+			vis = frame_red.copy()
 
 			print len(self.tracks)
 			if len(self.tracks) > 0:
 				img0, img1 = self.prev_gray, frame_gray
 				p0 = np.float32([tr[-1] for tr in self.tracks]).reshape(-1, 1, 2)
-				print "p0: " , p0[:10]
+				print "p0: " , p0.shape
 				p1, st, err = cv2.calcOpticalFlowPyrLK(img0, img1, p0, None, **lk_params)
 				p0r, st, err = cv2.calcOpticalFlowPyrLK(img1, img0, p1, None, **lk_params)
 				d = abs(p0-p0r).reshape(-1, 2).max(-1)
-				print "d sorted: " , np.sort(d)[-10:]
+				print "d sorted: " , np.sort(d).shape
 				# d controls the max number of pixels a single-frame of flow measurement is allowed to deviate
 				good = d < MAXDIFF
 				new_tracks = []
@@ -97,79 +101,116 @@ class App:
 					new_tracks.append(tr)
 					cv2.circle(vis, (x, y), 2, (0, 255, 0), -1)
 				self.tracks = new_tracks
+				print len(self.tracks)
 				cv2.polylines(vis, [np.int32(tr) for tr in self.tracks], False, (0, 255, 0))
-				draw_str(vis, (20, 20), 'track count: %d' % len(self.tracks))
+				##draw_str(vis, (20, 20), 'track count: %d' % len(self.tracks))
 
 			if self.frame_idx % self.detect_interval == 0:
 				mask = np.zeros_like(frame_gray)
 				mask[:] = 255
-				# for x, y in [np.int32(tr[-1]) for tr in self.tracks]:
-				# 	cv2.circle(mask, (x, y), 5, 0, -1)
+				for x, y in [np.int32(tr[-1]) for tr in self.tracks]:
+					cv2.circle(mask, (x, y), 5, 0, -1)
 				p = cv2.goodFeaturesToTrack(frame_gray, mask = mask, **feature_params)
+				print "P shape: ", p.shape
 				if p is not None:
 					for x, y in np.float32(p).reshape(-1, 2):
 						self.tracks.append([(x, y)])
+				
 				tracks_now = [np.float32(tr) for tr in self.tracks]
 				try:
-					print "tracks now shape: ", len(tracks_now)
+					print "tracks now shape: ", len(tracks_now), " | ", len(tracks_now[0])
 					seq = tracks_now[0]
 					print "seq: ", seq
 					tdepth = self.track_len
-					track_vectors = np.append( tracks_now[0][ min(len(seq)-1, tdepth) ], seq[0])
+					track_vectors = np.append( seq[0], tracks_now[0][ min(len(seq)-1, tdepth) ] )
 
 					for n, tr in enumerate(tracks_now[1:]):
-						track_vectors = np.append(track_vectors, np.append(tr[ min(len(tr)-1, tdepth) ], (tr[0])))
-
-					# track_vectors is variable-length, up to max-number-of-corners
+						track_vectors = np.append(track_vectors, np.append(tr[0], tr[ min(len(tr)-1, tdepth) ]))
+					
+					# track_vectors is variable-length, up to max-number-of-corners (?)
 					track_vectors = np.reshape(np.array(track_vectors, dtype='float32'), (-1,4))
+					
+					print "tv shape: ",  track_vectors.shape
 					
 					xdelta = track_vectors[:,2] - track_vectors[:,0]
 					ydelta = track_vectors[:,3] - track_vectors[:,1]
 					thetas = np.arctan2(ydelta, xdelta)
 					mags = np.sqrt(np.add(np.power(xdelta, 2.0), np.power(ydelta, 2.0)))
 					
-					xbin = np.floor(track_vectors[:,0] / self.grid_width)
-					ybin = np.floor(track_vectors[:,1] / self.grid_height)
+					xbins = np.floor(track_vectors[:,0] / self.grid_width)
+					ybins = np.floor(track_vectors[:,1] / self.grid_height)
 					
-					# print [np.min(xbin), np.max(xbin), np.min(ybin), np.max(ybin)]
+					print ">>>>>>> ", [np.min(track_vectors[:,0]), np.max(track_vectors[:,0]), np.min(track_vectors[:,1]), np.max(track_vectors[:,1])]
+					print ">>>>>>> ", [np.min(xbins), np.max(xbins), np.min(ybins), np.max(ybins)]
 					
 					# filter out vectors less than 1 pixel!
-				 	# weighted = np.where(mags > MAXDIFF, mags, 0.0)
-# 				 	print "weighted shape: ", weighted.shape
+				 	weighted = np.where(mags > MAXDIFF, mags, 0.0)
+				 	print "weighted shape: ", weighted.shape
+				 	print "weighted up to 100: ", weighted[:100]
 					theta_bins = np.floor_divide(np.add(thetas, math.pi), QPI)
-# 					ctheta_bins = np.floor_divide(np.add(cthetas, math.pi), QPI)
 									
-					combo_bins = ((np.add(np.multiply(ybin, 8), xbin) * 8) + theta_bins)
-					
+					combo_bins = (np.multiply(np.add(np.multiply(ybins, 8), xbins), 8) + theta_bins)
+ 					print "-----------------------------------------------"
+# 					print combo_bins
+ 					print "CBins shape: ", combo_bins.shape
+					print np.max(combo_bins)
 					if combo_bins.shape[0] > 0:
-				 
-# 				 		print combo_bins.shape
-# 						print np.max(combo_bins)
-						bins_histo, bin_edges = np.histogram(combo_bins, COLS) #, weights=weighted)
+				 	
+						bins_histo, bin_edges = np.histogram(combo_bins, COLS, weights=weighted)
 # 						print "-----------------------------------------------"
 # 						print bins_histo
+# 						print bins_histo.shape
 # 						print self.frame_idx
 # 						print "-----------------------------------------------"
-	
-
+						
 						self.fp[self.frame_idx,:512] = bins_histo
 						self.fp[self.frame_idx,512:] = frame_gray_ds[:]
 # 						print self.frame_idx
-					else:
+						
+						currframe = self.fp[self.frame_idx,:512]
+						framemin = currframe[:512].min()
+						framemax = currframe[:512].max()
+						framerange = framemax - framemin
+						print framemin
+						print framemax
+						print framerange
+						print currframe.shape
+						if framerange > 0:
+							grays = np.multiply(np.subtract(currframe, framemin), (256.0 / framerange))
+						
+							grays_ma = np.ma.masked_invalid(grays)
+							grays = grays_ma.filled(0.0)
 
-						if verbose: print 'Zero! frame: ', self.frame_idx
+							for i, gry in enumerate(grays):
+								gry = int(gry)
+								print [i, gry]
+								theta = THETAS[(i%8)]
+	# 							print "----------------------------"
+	# 							print theta
+	# 							print ">>> ", ((i/64)*240+120)+int(theta[0])
+	#  							print ">>> ", [((i/64)*240+120), ((i/8)*135+67), gry]
+								if gry > 2:
+	# 	 							cv2.circle(vis, (((i/64)*240+120)+int(theta[0]), (((i/8)%8)*135+67)+int(theta[1])), 15, (gry, gry, gry), 2)
+	# 	 							cv2.line(vis, (((i/64)*240+120), (((i/8)%8)*135+67)), (((i/64)*240+120)+int(theta[0]), (((i/8)%8)*135+67)+int(theta[1])), (gry, gry, gry), 2)
+	# 	 							cv2.circle(vis, (((i/64)*240+120), (((i/8)%8)*135+67)), 5, (gry, gry, gry), 2)
+									cv2.circle(vis, ((((i/8)%8)*240+120)+int(theta[0]), ((i/64)*135+67)+int(theta[1])), 15, (gry, gry, gry), 2)
+									cv2.line(vis, ((((i/8)%8)*240+120), ((i/64)*135+67)), ((((i/8)%8)*240+120)+int(theta[0]), ((i/64)*135+67)+int(theta[1])), (gry, gry, gry), 2)
+									cv2.circle(vis, ((((i/8)%8)*240+120), ((i/64)*135+67)), 5, (gry, gry, gry), 2)
+					else:
+						print 'Zero! frame: ', self.frame_idx
 						# fp[self.frame_idx] = np.zeros(512, dtype='float32') # 16*8=128
 
 				except IndexError:
 					print 'Index Error! frame: ', self.frame_idx
 				# 
-				# 					fd6 = (self.frame_idx/6) - offset_strides
-				# 					if verbose: print 'Index Error! frame: ', fd6
-				# 					fp[fd6] = np.zeros(128, dtype='float32') # 16*8=128
+				# 	fd6 = (self.frame_idx/6) - offset_strides
+				# 	if verbose: print 'Index Error! frame: ', fd6
+				# 	fp[fd6] = np.zeros(128, dtype='float32') # 16*8=128
 			
 			self.frame_idx += 1
 			self.prev_gray = frame_gray
  			cv2.imshow('lk_track', vis)
+ 			cv2.imwrite('/Users/kfl/dev/git/synaesthesia/imgs/img_'+str(self.frame_idx)+'.png', vis)
 
 			ch = 0xFF & cv2.waitKey(1)
 			if ch == 27:
